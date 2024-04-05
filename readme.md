@@ -68,7 +68,7 @@ That's pretty much it for image information. Now al we have to do is go through 
 ### Multi-Head Self-Attention
 ---
 Multihead Self-Attention
-$$[Q,K,V] = zU_{QKV}, \; U \in \mathbb{R}^{D\times 3D_h}$$ 
+$$[Q,K,V] = zU_{QKV}, U \in \mathbb{R}^{D\times 3D_h}$$ 
 $$A = softmax(\frac{QK^\top}{\sqrt{D_h}}) \; A \in \mathbb{R}^{N \times N} $$
 
 ### Feed-Forward Network
