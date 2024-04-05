@@ -199,4 +199,118 @@ class FasterMHA(nn.Module):
 
 class MLP(nn.Module):
     def __init__(self,config):
+        super().__init__()
+        self.dense_1 = nn.Linear(config["hidden_size"], config["intermediate_size"])
+        self.activation = GELU()
+        self.dense_2 = nn.Linear(config["intermediate_size"],config["hidden_size"])
+        self.dropout = nn.Dropout(["hidden_dropout_prob"])
+
+    def forward(self, x):
+        x = self.dense_1(x)
+        x = self.activation(x)
+        x = self.dense_2(x)
+        x = self.dropout(x)
+        return x
+    
+
+class Block(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.use_faster_attention = config.get("use_faster_attention", False)
+        if self.use_faster_attention:
+            self.attention = FasterMHA(config)
+        else: 
+            self.attention = MultiHeadAttention(config)
         
+        self.layernrom_1 = nn.LayerNorm(config["hidden_size"])
+        self.mlp = MLP(config)
+        self.layernrom_2 = nn.LayerNorm(config["hidden_size"])
+    
+    def forward(self, x, output_attentions = False):
+        #self-attention
+        attention_output, attention_probs = \
+            self.attention(self.layernorm_1(x), output_attentions = output_attentions)
+        # Skip connection
+        x = x + attention_output
+        #feed forward
+        mlp_output = self.mlp(self.layernrom_2(x))
+        x = x + mlp_output
+        if not output_attentions:
+            return (x, None)
+        else: 
+            return (x, attention_probs)
+        
+
+
+class Encoder(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.blocks = nn.ModuleList([])
+        for _ in range(config["num_hidden_layers"]):
+            block = Block(config)
+            self.blocks.append(block)
+        
+    def forward(self, x, output_attentions = False):
+        all_attentions = []
+        for block in self.blocks:
+            x, attention_probs = block(x, output_attentions = output_attentions)
+            if output_attentions:
+                all_attentions.append(attention_probs)
+        if not output_attentions:
+            return(x, None)
+        else: 
+            return (x, all_attentions)
+        
+class ViTForClassfication(nn.Module):
+    """
+    The ViT model for classification.
+    """
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.image_size = config["image_size"]
+        self.hidden_size = config["hidden_size"]
+        self.num_classes = config["num_classes"]
+        # Create the embedding module
+        self.embedding = Embeddings(config)
+        # Create the transformer encoder module
+        self.encoder = Encoder(config)
+        # Create a linear layer to project the encoder's output to the number of classes
+        self.classifier = nn.Linear(self.hidden_size, self.num_classes)
+        # Initialize the weights
+        self.apply(self._init_weights)
+
+    def forward(self, x, output_attentions=False):
+        # Calculate the embedding output
+        embedding_output = self.embedding(x)
+        # Calculate the encoder's output
+        encoder_output, all_attentions = self.encoder(embedding_output, output_attentions=output_attentions)
+        # Calculate the logits, take the [CLS] token's output as features for classification
+        logits = self.classifier(encoder_output[:, 0, :])
+        # Return the logits and the attention probabilities (optional)
+        if not output_attentions:
+            return (logits, None)
+        else:
+            return (logits, all_attentions)
+        
+    def _init_weights(self, module):
+        if isinstance(module, (nn.Linear, nn.Conv2d)):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=self.config["initializer_range"])
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
+        elif isinstance(module, Embeddings):
+            module.position_embeddings.data = nn.init.trunc_normal_(
+                module.position_embeddings.data.to(torch.float32),
+                mean=0.0,
+                std=self.config["initializer_range"],
+            ).to(module.position_embeddings.dtype)
+
+            module.cls_token.data = nn.init.trunc_normal_(
+                module.cls_token.data.to(torch.float32),
+                mean=0.0,
+                std=self.config["initializer_range"],
+            ).to(module.cls_token.dtype)
